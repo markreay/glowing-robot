@@ -8,9 +8,19 @@ import re
 import hashlib
 from tqdm import tqdm
 
+# argument --force or -f to force regeneration of all images
+import argparse
+
+parser = argparse.ArgumentParser(description="Process and resize images based on JSON metadata.")
+parser.add_argument('--force', '-f', action='store_true', help="Force regeneration of all images.")
+args = parser.parse_args()  
+
+force_regenerate = args.force
+    
 # Paths
 json_dir = os.path.expanduser("~/src/zoe/zoe-nexus-data/storage/zoe-nexus/zoe/images")
 output_dir = os.path.expanduser("~/src/zoe/glowing-robot-images/photos")
+temp_dir = os.path.expanduser("~/src/zoe/glowing-robot-images/photos.tmp")
 
 # Size mapping
 size_map = {
@@ -61,12 +71,28 @@ for file in tqdm(json_files, desc="Processing images", unit="file"):
     full_out_path = os.path.join(output_dir, f"{title_slug}-{md5_hash_short}-full.png")
 
     # If -full exists and matches source hash, skip regenerating smaller versions
-    if os.path.exists(full_out_path) and md5sum(full_out_path) == md5sum(png_path):
+    if not force_regenerate and os.path.exists(full_out_path) and md5sum(full_out_path) == md5sum(png_path):
         #tqdm.write(f"Skipping {png_filename} — full image unchanged.")
         continue
 
     # Copy source 
     shutil.copy(png_path, full_out_path)
+
+    def safe_save(img, out_path):
+        """Save image with error handling."""
+        """Also ensure that the output file is never partially written even if the process is interrpted."""
+
+        out_path_dir, out_path_filename = os.path.split(out_path)
+        temp_path = os.path.join(temp_dir, out_path_filename)
+        os.makedirs(temp_dir, exist_ok=True)
+        try:
+            img.save(temp_path)
+            os.replace(temp_path, out_path)  # Atomically replace the file
+            tqdm.write(f"Saved {out_path}")
+        except Exception as e:
+            tqdm.write(f"Error saving {out_path}: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
 
     # Open source image
     img = Image.open(png_path)
@@ -78,12 +104,10 @@ for file in tqdm(json_files, desc="Processing images", unit="file"):
         resized_img = img.copy()
         resized_img.thumbnail((size_value, size_value))
         out_name = f"{title_slug}-{md5_hash_short}-{size_name}.png"
-        resized_img.save(os.path.join(output_dir, out_name))
-
-    # Save default medium size without suffix
-    default_img = img.copy()
-    default_img.thumbnail((size_map["medium"], size_map["medium"]))
-    default_name = f"{title_slug}-{md5_hash_short}.png"
-    default_img.save(os.path.join(output_dir, default_name))
+        safe_save(resized_img, os.path.join(output_dir, out_name))
+        if size_name == "medium":
+            # Save default medium size without suffix
+            default_name = f"{title_slug}-{md5_hash_short}.png"
+            safe_save(resized_img, os.path.join(output_dir, default_name))
 
     tqdm.write(f"Processed {png_filename} → outputs regenerated.")
